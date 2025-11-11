@@ -18,6 +18,9 @@ resource "google_compute_instance" "budget_app" {
 
   tags = ["budget-app", "basic", "web"]
 
+  # ================================
+  # CONFIGURACIÓN DE LA VM
+  # ================================
   metadata_startup_script = <<-EOT
     #!/bin/bash
     set -e
@@ -60,84 +63,70 @@ resource "google_compute_instance" "budget_app" {
     systemctl enable mysql
 
     mysql -u root <<MYSQL_SCRIPT
-        CREATE DATABASE IF NOT EXISTS $${MYSQL_DB};
-        CREATE USER IF NOT EXISTS '$${MYSQL_USER}'@'%' IDENTIFIED BY '$${MYSQL_PASS}';
-        GRANT ALL PRIVILEGES ON $${MYSQL_DB}.* TO '$${MYSQL_USER}'@'%';
-        FLUSH PRIVILEGES;
+      CREATE DATABASE IF NOT EXISTS $${MYSQL_DB};
+      CREATE USER IF NOT EXISTS '$${MYSQL_USER}'@'%' IDENTIFIED BY '$${MYSQL_PASS}';
+      GRANT ALL PRIVILEGES ON $${MYSQL_DB}.* TO '$${MYSQL_USER}'@'%';
+      FLUSH PRIVILEGES;
     MYSQL_SCRIPT
 
     # ====== CLONAR PROYECTO ======
+    mkdir -p /var/www/budget-app
     cd /var/www
     git clone ${var.git_repo} budget-app
     cd budget-app
+
+    # ====== CREAR .ENV ======
+    echo "${file("./.env")}" > /var/www/budget-app/.env
+
+    # ====== AJUSTAR IP EN .ENV ======
+    VM_IP=$(curl -s ifconfig.me)
+    sed -i "s|__VM_EXTERNAL_IP__|$VM_IP|g" /var/www/budget-app/.env
 
     # ====== DEPENDENCIAS PHP + NODE ======
     composer install --no-interaction --prefer-dist
     npm install
     npm run build
 
+    # ====== CONFIGURAR LARAVEL ======
+    php artisan key:generate
+    php artisan migrate --force
+
     # ====== PERMISOS ======
     chown -R www-data:www-data /var/www/budget-app/storage /var/www/budget-app/bootstrap/cache
 
     # ====== NGINX ======
     cat <<NGINXCONF >/etc/nginx/sites-available/budget-app
-        server {
-            listen 80;
-            server_name _;
-            root /var/www/budget-app/public;
+      server {
+          listen 80;
+          server_name _;
+          root /var/www/budget-app/public;
 
-            index index.php index.html;
+          index index.php index.html;
 
-            location / {
-                try_files \$uri \$uri/ /index.php?\$query_string;
-            }
+          location / {
+              try_files \$uri \$uri/ /index.php?\$query_string;
+          }
 
-            location ~ \.php\$ {
-                include snippets/fastcgi-php.conf;
-                fastcgi_pass unix:/run/php/php8.2-fpm.sock;
-            }
+          location ~ \.php\$ {
+              include snippets/fastcgi-php.conf;
+              fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+          }
 
-            location ~ /\.ht {
-                deny all;
-            }
-        }
+          location ~ /\.ht {
+              deny all;
+          }
+      }
     NGINXCONF
 
     ln -s /etc/nginx/sites-available/budget-app /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
     nginx -t && systemctl reload nginx
   EOT
-
-  # ====== COPIAR .env ======
-  provisioner "file" {
-    source      = "./.env"
-    destination = "/var/www/budget-app/.env"
-  }
-
-  # ====== ARTISAN MIGRATE ======
-  provisioner "remote-exec" {
-    inline = [
-      "cd /var/www/budget-app",
-      # Reemplazar placeholder __VM_EXTERNAL_IP__ con la IP real
-      "sed -i 's|__VM_EXTERNAL_IP__|'${self.network_interface[0].access_config[0].nat_ip}'|g' .env",
-      "php artisan key:generate",
-      "php artisan migrate --force",
-      "npm install",
-      "npm run build",
-      "chown -R www-data:www-data storage bootstrap/cache",
-      "systemctl restart nginx"
-    ]
-  }
-
-  # ====== SSH ======
-  connection {
-    type        = "ssh"
-    user        = var.ssh_user
-    private_key = file(var.ssh_private_key_path)
-    host        = self.network_interface[0].access_config[0].nat_ip
-  }
 }
 
+# ================================
+# FIREWALL HTTP/HTTPS
+# ================================
 resource "google_compute_firewall" "allow_http_https" {
   name    = "allow-http-https"
   network = "default"
@@ -148,6 +137,5 @@ resource "google_compute_firewall" "allow_http_https" {
   }
 
   source_ranges = ["0.0.0.0/0"]
-
-  target_tags = ["web"]
+  target_tags   = ["web"]
 }

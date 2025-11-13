@@ -1,3 +1,7 @@
+locals {
+  ssh_private_key = file(var.ssh_private_key_file)
+}
+
 resource "google_compute_instance" "budget_app" {
   name         = var.vm_name
   machine_type = "f1-micro"
@@ -18,9 +22,6 @@ resource "google_compute_instance" "budget_app" {
 
   tags = ["budget-app", "basic", "web"]
 
-  # ================================
-  # CONFIGURACIÓN DE LA VM
-  # ================================
   metadata_startup_script = <<-EOT
     #!/bin/bash
     set -e
@@ -33,44 +34,53 @@ resource "google_compute_instance" "budget_app" {
     echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
 
     # ====== SISTEMA ======
-    apt-get update -y && apt-get upgrade -y
-    apt-get install -y software-properties-common curl git unzip nginx ufw mysql-server sqlite3
+    apt-get update -y 
+    apt-get install -y software-properties-common curl git unzip nginx ufw mariadb-server sqlite3
 
     # ====== PHP 8.2 ======
-    add-apt-repository ppa:ondrej/php -y
-    apt-get update -y
     apt-get install -y php8.2 php8.2-cli php8.2-fpm php8.2-mbstring php8.2-xml php8.2-curl php8.2-mysql php8.2-zip php8.2-bcmath
-
+    
+    export HOME=/root
+    export COMPOSER_HOME=$HOME/.composer
     # ====== COMPOSER ======
     curl -sS https://getcomposer.org/installer | php
-    mv composer.phar /usr/local/bin/composer
+    sudo mv composer.phar /usr/local/bin/composer
 
-    # ====== NODE 18 ======
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-    apt-get install -y nodejs npm
+    # ====== NODE ======
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
 
     # ====== FIREWALL ======
     ufw allow 'Nginx Full'
     ufw --force enable
 
-    # ====== MYSQL ======
+    # ====== MARIADB ======
     MYSQL_ROOT_PASSWORD="${var.db_root_password}"
     MYSQL_DB="${var.db_name}"
     MYSQL_USER="${var.db_user}"
     MYSQL_PASS="${var.db_password}"
 
-    systemctl start mysql
-    systemctl enable mysql
+    systemctl start mariadb
+    systemctl enable mariadb
 
     mysql -u root <<MYSQL_SCRIPT
+      ALTER USER 'root'@'localhost' IDENTIFIED BY '$${MYSQL_ROOT_PASSWORD}';
       CREATE DATABASE IF NOT EXISTS $${MYSQL_DB};
       CREATE USER IF NOT EXISTS '$${MYSQL_USER}'@'%' IDENTIFIED BY '$${MYSQL_PASS}';
       GRANT ALL PRIVILEGES ON $${MYSQL_DB}.* TO '$${MYSQL_USER}'@'%';
       FLUSH PRIVILEGES;
     MYSQL_SCRIPT
 
+    # ====== CONFIGURAR SSH PARA GIT ======
+
+    mkdir -p /root/.ssh
+    echo "${local.ssh_private_key}" > /root/.ssh/id_ed25519
+    chmod 600 /root/.ssh/id_ed25519
+    ssh-keyscan github.com >> /root/.ssh/known_hosts
+
     # ====== CLONAR PROYECTO ======
     mkdir -p /var/www/budget-app
+    chown -R ${var.ssh_user}:${var.ssh_user} /var/www/budget-app
     cd /var/www
     git clone ${var.git_repo} budget-app
     cd budget-app
@@ -107,7 +117,7 @@ resource "google_compute_instance" "budget_app" {
               try_files \$uri \$uri/ /index.php?\$query_string;
           }
 
-          location ~ \.php\$ {
+          location ~ \.php$ {
               include snippets/fastcgi-php.conf;
               fastcgi_pass unix:/run/php/php8.2-fpm.sock;
           }

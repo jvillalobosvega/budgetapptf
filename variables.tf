@@ -35,28 +35,29 @@ variable "swap_size" {
 
 variable "db_root_password" {
   description = "Contraseña root de MySQL"
-  default     = "rootpass123"
 }
 
 variable "db_name" {
   description = "Nombre de la base de datos"
-  default     = "churchaccounting"
 }
 
 variable "db_user" {
   description = "Usuario MySQL"
-  default     = "budget_user"
 }
 
 variable "db_password" {
   description = "Contraseña usuario MySQL"
-  default     = "budgetpass123"
 }
 
 variable "git_repo" {
   description = "URL del repositorio Git"
   default     = "https://github.com/jvillalobosvega/churchaccounting.git"
 }
+
+variable "ssh_private_key_file" {
+  description = "Ruta al archivo de la clave SSH privada"
+}
+
 
 variable "ssh_user" {
   description = "Usuario para SSH"

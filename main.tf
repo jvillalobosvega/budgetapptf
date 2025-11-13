@@ -35,13 +35,14 @@ resource "google_compute_instance" "budget_app" {
 
     # ====== SISTEMA ======
     apt-get update -y 
-    apt-get install -y software-properties-common curl git unzip nginx ufw mariadb-server sqlite3
+    apt-get install -y software-properties-common curl git unzip nginx ufw mariadb-server sqlite3 openssh-server
 
     # ====== PHP 8.2 ======
     apt-get install -y php8.2 php8.2-cli php8.2-fpm php8.2-mbstring php8.2-xml php8.2-curl php8.2-mysql php8.2-zip php8.2-bcmath
     
     export HOME=/root
     export COMPOSER_HOME=$HOME/.composer
+
     # ====== COMPOSER ======
     curl -sS https://getcomposer.org/installer | php
     sudo mv composer.phar /usr/local/bin/composer
@@ -51,8 +52,13 @@ resource "google_compute_instance" "budget_app" {
     apt-get install -y nodejs
 
     # ====== FIREWALL ======
+    ufw allow OpenSSH
     ufw allow 'Nginx Full'
     ufw --force enable
+
+    # ====== SSHD ======
+    systemctl enable ssh
+    systemctl start ssh
 
     # ====== MARIADB ======
     MYSQL_ROOT_PASSWORD="${var.db_root_password}"
@@ -72,7 +78,6 @@ resource "google_compute_instance" "budget_app" {
     MYSQL_SCRIPT
 
     # ====== CONFIGURAR SSH PARA GIT ======
-
     mkdir -p /root/.ssh
     echo "${local.ssh_private_key}" > /root/.ssh/id_ed25519
     chmod 600 /root/.ssh/id_ed25519
@@ -148,4 +153,20 @@ resource "google_compute_firewall" "allow_http_https" {
 
   source_ranges = ["0.0.0.0/0"]
   target_tags   = ["web"]
+}
+
+# ================================
+# FIREWALL SSH
+# ================================
+resource "google_compute_firewall" "allow_ssh" {
+  name    = "allow-ssh"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["web", "basic", "budget-app"]
 }
